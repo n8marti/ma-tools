@@ -26,7 +26,7 @@ from pathlib import Path
 PROJECT = "SFMPREV"
 POSTPART = f"{PROJECT}.SFM"
 
-# Paratext book codes in canonical order (index = position in BooksPresent).
+# Paratext book codes -> file-name numbers.
 CANON = {
     "FRT": "A0", "BAK": "A1", "OTH": "A2",
     "INT": "A7", "CNC": "A8", "GLO": "A9",
@@ -149,6 +149,32 @@ def set_font(projdir, config, family, only_if_missing):
     print(f"Font set to {family} in {cfgpath}")
 
 
+MARKER_RE = re.compile(r"^\\Marker\s+(\S+)", re.M)
+
+
+def merge_styles(target, source):
+    """Add the marker definitions in `source` to the stylesheet `target`.
+
+    PTXprint always reads the configuration's ptxprint.sty (it ignores a
+    project custom.sty here). Definitions for the same markers are replaced,
+    so repeated runs don't pile up duplicates; other styles, including ones
+    changed in the PTXprint GUI, are kept.
+    """
+    new = Path(source).read_text(encoding="utf-8-sig").strip()
+    names = set(MARKER_RE.findall(new))
+    old = target.read_text(encoding="utf-8") if target.exists() else ""
+    starts = [m.start() for m in MARKER_RE.finditer(old)] + [len(old)]
+    kept = [old[:starts[0]].rstrip()]
+    for a, b in zip(starts, starts[1:]):
+        block = old[a:b].strip()
+        if MARKER_RE.match(block).group(1) not in names:
+            kept.append(block)
+    merged = "\n\n".join(x for x in kept + [new] if x) + "\n"
+    if merged != old:
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(merged, encoding="utf-8")
+
+
 def open_file(path):
     if os.name == "nt":
         os.startfile(path)  # type: ignore[attr-defined]
@@ -163,7 +189,8 @@ def main():
     ap.add_argument("infile", nargs="?", help="SFM/USFM file to typeset")
     ap.add_argument("-o", "--output", help="PDF path (default: next to the input file)")
     ap.add_argument("--book", help="3-letter book code (default: from the \\id line)")
-    ap.add_argument("--sty", help="custom stylesheet for your own markers (becomes custom.sty)")
+    ap.add_argument("--sty", help="stylesheet defining your own markers (merged into "
+                                  "the configuration's ptxprint.sty)")
     ap.add_argument("--changes", help="regex changes file applied before typesetting "
                                       "(becomes PrintDraftChanges.txt)")
     ap.add_argument("--font", help=f"body font family (default: keep the configured "
@@ -177,7 +204,7 @@ def main():
                     help="open the PTXprint GUI on the preview project instead")
     ap.add_argument("--no-open", action="store_true", help="don't open the PDF")
     argv = sys.argv[1:]
-    if "--" in argv:
+    if "--" in argv:  # everything after -- goes straight to PTXprint
         i = argv.index("--")
         argv, extra = argv[:i], argv[i + 1:]
     else:
@@ -217,14 +244,16 @@ def main():
     (projdir / f"{book_number(book)}{book}{POSTPART}").write_text(text, encoding="utf-8")
 
     # Custom markers: stylesheet and/or pre-typesetting regex changes.
-    for src, name in ((args.sty, "custom.sty"), (args.changes, "PrintDraftChanges.txt")):
-        dest = projdir / name
-        if src:
-            shutil.copyfile(src, dest)
-        elif dest.exists():
-            dest.unlink()
+    if args.sty:
+        merge_styles(find_config(projdir, args.config).parent / "ptxprint.sty", args.sty)
+    changes = projdir / "PrintDraftChanges.txt"
+    if args.changes:
+        shutil.copyfile(args.changes, changes)
+    elif changes.exists():
+        changes.unlink()
 
-    cmd = [ptx, "-P", "-q", "-p", str(projects), "-c", args.config, "-b", book, *extra, PROJECT]
+    cmd = [ptx, "-P", "-q", "-p", str(projects), "-c", args.config,
+           "-b", book, *extra, PROJECT]
     print("Running:", " ".join(cmd))
     start = time.time()
     result = subprocess.run(cmd, check=False)
