@@ -183,7 +183,7 @@ def merge_styles(target, source):
         target.write_text(merged, encoding="utf-8")
 
 
-XREF_NOTE_RE = re.compile(r"\s*\\x(\d+)\s+(.*?)\s*\\x\*", re.S)
+XREF_NOTE_RE = re.compile(r"\s*\\x(\d+)\s+(.*?)\s*\\x\*", re.DOTALL)
 XREF_ANCHOR_RE = re.compile(r"\*x(\d+)\*")
 CV_RE = re.compile(r"\\([cv])\s+(\S+)")
 
@@ -206,23 +206,24 @@ def inline_xrefs(text, caller="+"):
                 verse = m.group(2)
         anchors = set(XREF_ANCHOR_RE.findall(seg))
         notes = {}
+        where = f"{chapter}:{verse}"
 
-        def take_note(n, notes=notes, anchors=anchors):
+        def take_note(n, notes=notes, anchors=anchors, where=where):
             num, body = n.group(1), n.group(2)
             if num in anchors and num not in notes:
                 notes[num] = body
                 return ""
-            print(f"sfm2pdf: warning: {chapter}:{verse}: \\x{num} has no "
+            print(f"sfm2pdf: warning: {where}: \\x{num} has no "
                   f"*x{num}* anchor; leaving the note where it is.")
             return f" \\x {caller} {body}\\x*"
 
         seg = XREF_NOTE_RE.sub(take_note, seg)
 
-        def place_note(a, notes=notes):
+        def place_note(a, notes=notes, where=where):
             nonlocal moved
             num = a.group(1)
             if num not in notes:
-                print(f"sfm2pdf: warning: {chapter}:{verse}: *x{num}* has no "
+                print(f"sfm2pdf: warning: {where}: *x{num}* has no "
                       f"\\x{num} note.")
                 return a.group(0)
             moved += 1
