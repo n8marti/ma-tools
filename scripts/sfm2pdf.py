@@ -183,6 +183,57 @@ def merge_styles(target, source):
         target.write_text(merged, encoding="utf-8")
 
 
+XREF_NOTE_RE = re.compile(r"\s*\\x(\d+)\s+(.*?)\s*\\x\*", re.S)
+XREF_ANCHOR_RE = re.compile(r"\*x(\d+)\*")
+CV_RE = re.compile(r"\\([cv])\s+(\S+)")
+
+
+def inline_xrefs(text, caller="+"):
+    """Turn Easy-KeyEdit4 cross-references into inline USFM notes.
+
+    EK puts an anchor `*x1*` in the text and the note `\\x1 \\xt Bk c:v \\x*`
+    at the end of the verse. USFM wants `\\x + \\xt Bk c:v\\x*` at the anchor.
+    Notes are matched to anchors by number within each verse.
+    """
+    chapter, verse, moved = "?", "?", 0
+    out = []
+    for seg in re.split(r"(?=\\[cv]\s)", text):
+        m = CV_RE.match(seg)
+        if m:
+            if m.group(1) == "c":
+                chapter, verse = m.group(2), "0"
+            else:
+                verse = m.group(2)
+        anchors = set(XREF_ANCHOR_RE.findall(seg))
+        notes = {}
+
+        def take_note(n, notes=notes, anchors=anchors):
+            num, body = n.group(1), n.group(2)
+            if num in anchors and num not in notes:
+                notes[num] = body
+                return ""
+            print(f"sfm2pdf: warning: {chapter}:{verse}: \\x{num} has no "
+                  f"*x{num}* anchor; leaving the note where it is.")
+            return f" \\x {caller} {body}\\x*"
+
+        seg = XREF_NOTE_RE.sub(take_note, seg)
+
+        def place_note(a, notes=notes):
+            nonlocal moved
+            num = a.group(1)
+            if num not in notes:
+                print(f"sfm2pdf: warning: {chapter}:{verse}: *x{num}* has no "
+                      f"\\x{num} note.")
+                return a.group(0)
+            moved += 1
+            return f"\\x {caller} {notes.pop(num)}\\x*"
+
+        out.append(XREF_ANCHOR_RE.sub(place_note, seg))
+    if moved:
+        print(f"Moved {moved} cross-reference{'s' if moved != 1 else ''} inline.")
+    return "".join(out)
+
+
 def open_file(path):
     if os.name == "nt":
         os.startfile(path)  # type: ignore[attr-defined]
@@ -207,6 +258,12 @@ def main():
     ap.add_argument("--lang", default="en", help="language ISO code for Settings.xml")
     ap.add_argument("--encoding", default="cp1252",
                     help="encoding to assume if the file isn't UTF-8 (default cp1252)")
+    ap.add_argument("--xref-caller", default="+",
+                    help="caller for cross-references converted from Easy-KeyEdit "
+                         "form: + (auto), - (none), or a character (default +)")
+    ap.add_argument("--no-xref-fix", action="store_true",
+                    help="don't convert Easy-KeyEdit *x1* ... \\x1 ...\\x* "
+                         "cross-references to inline USFM")
     ap.add_argument("--ptxprint", help="path to the PTXprint executable")
     ap.add_argument("--gui", action="store_true",
                     help="open the PTXprint GUI on the preview project instead")
@@ -245,6 +302,8 @@ def main():
     book = book.upper()
     if not re.search(r"^\s*\\id\s", text, re.MULTILINE):
         text = f"\\id {book}\n" + text
+    if not args.no_xref_fix:
+        text = inline_xrefs(text, args.xref_caller)
 
     # Replace any book files left from earlier runs with this one.
     for old in projdir.glob(f"*{POSTPART}"):
