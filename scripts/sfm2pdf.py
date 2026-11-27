@@ -15,6 +15,7 @@ PTXprint GUI (sfm2pdf --gui) are reused for every later preview.
 
 import argparse
 import configparser
+import itertools
 import os
 import re
 import shutil
@@ -58,6 +59,13 @@ FONT_FACES = {
     "fontitalic": " Italic",
     "fontbolditalic": " Italic Bold",
 }
+
+
+class CaseConfigParser(configparser.ConfigParser):
+    """ConfigParser that keeps key case as PTXprint wrote it."""
+
+    def optionxform(self, optionstr: str) -> str:
+        return optionstr
 
 
 def book_number(code):
@@ -127,8 +135,7 @@ def set_font(projdir, config, family, only_if_missing):
     one made in the PTXprint GUI, is left alone.
     """
     cfgpath = find_config(projdir, config)
-    cp = configparser.ConfigParser(interpolation=None)
-    cp.optionxform = str  # keep key case as PTXprint wrote it
+    cp = CaseConfigParser(interpolation=None)
     if cfgpath.exists():
         cp.read(cfgpath, encoding="utf-8")
     section = next((s for s in cp.sections() if cp.has_option(s, "fontregular")),
@@ -149,7 +156,7 @@ def set_font(projdir, config, family, only_if_missing):
     print(f"Font set to {family} in {cfgpath}")
 
 
-MARKER_RE = re.compile(r"^\\Marker\s+(\S+)", re.M)
+MARKER_RE = re.compile(r"^\\Marker\s+(\S+)", re.MULTILINE)
 
 
 def merge_styles(target, source):
@@ -165,9 +172,10 @@ def merge_styles(target, source):
     old = target.read_text(encoding="utf-8") if target.exists() else ""
     starts = [m.start() for m in MARKER_RE.finditer(old)] + [len(old)]
     kept = [old[:starts[0]].rstrip()]
-    for a, b in zip(starts, starts[1:]):
+    for a, b in itertools.pairwise(starts):
         block = old[a:b].strip()
-        if MARKER_RE.match(block).group(1) not in names:
+        m = MARKER_RE.match(block)
+        if m and m.group(1) not in names:
             kept.append(block)
     merged = "\n\n".join(x for x in kept + [new] if x) + "\n"
     if merged != old:
